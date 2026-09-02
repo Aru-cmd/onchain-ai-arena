@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -33,15 +34,33 @@ type ModelConfig struct {
 	MaxTokens int      `json:"max_tokens,omitempty"`
 }
 
-// APIKey returns first available key.
+// APIKey returns first available key with ${ENV} expansion.
 func (m *ModelConfig) GetAPIKey() string {
+	raw := ""
 	if m.APIKey != "" {
-		return m.APIKey
+		raw = m.APIKey
+	} else if len(m.APIKeys) > 0 {
+		raw = m.APIKeys[0]
 	}
-	if len(m.APIKeys) > 0 {
-		return m.APIKeys[0]
+	if raw == "" {
+		return ""
 	}
-	return ""
+	// Expand ${GEMINI_API_KEY} style from env
+	if strings.HasPrefix(raw, "${") && strings.HasSuffix(raw, "}") {
+		key := raw[2 : len(raw)-1]
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+		// fallback to raw if env not set
+		return ""
+	}
+	// Also expand $VAR and ${VAR} anywhere
+	return os.ExpandEnv(raw)
+}
+
+// ResolvedAPIBase returns api_base with env expansion.
+func (m *ModelConfig) ResolvedAPIBase() string {
+	return os.ExpandEnv(m.APIBase)
 }
 
 // IsEnabled returns true if model is enabled (default true if nil).

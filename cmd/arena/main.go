@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/arena"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/config"
+	"github.com/Aru-cmd/onchain-ai-arena/pkg/llm"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/roast"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/trading"
 )
@@ -30,6 +33,7 @@ Support simulation (Rp 0) & on-chain testnet (Solana/EVM).`,
 	root.PersistentFlags().StringVarP(&cfgPath, "config", "c", "config/config.json", "path to config file")
 
 	root.AddCommand(cmdRun())
+	root.AddCommand(cmdChat())
 	root.AddCommand(cmdLeaderboard())
 	root.AddCommand(cmdVersion())
 
@@ -56,7 +60,7 @@ func loadConfig() *config.Config {
 func cmdRun() *cobra.Command {
 	return &cobra.Command{
 		Use:   "run",
-		Short: "Run arena orchestrator (poll market + simulate trading)",
+		Short: "Run arena orchestrator (poll market + simulate trading + LLM wiring)",
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg := loadConfig()
 			registry := arena.NewAgentRegistry(cfg)
@@ -66,17 +70,80 @@ func cmdRun() *cobra.Command {
 				TTLHoursMax:           cfg.Roast.UserTTLHoursMax,
 				RandomChance:          cfg.Roast.RandomChance,
 			})
-			_ = roastMgr
-			_ = trading.NewMarketWatcher(cfg.Chain.JupiterAPI, cfg.Chain.DexScreenerAPI, 0)
+			watcher := trading.NewMarketWatcher(cfg.Chain.JupiterAPI, cfg.Chain.DexScreenerAPI, time.Duration(cfg.Market.PollIntervalSeconds)*time.Second)
 
 			fmt.Printf("Arena started with %d agents: %v\n", len(registry.ListAgentIDs()), registry.ListAgentIDs())
 			for _, id := range registry.ListAgentIDs() {
 				ag, _ := registry.GetAgent(id)
-				fmt.Printf(" - %s (%s) persona=%s strategy=%s\n", ag.ID, ag.Name, ag.Persona, ag.Strategy.Type)
+				fmt.Printf(" - %s (%s) persona=%s strategy=%s model=%s\n", ag.ID, ag.Name, ag.Persona, ag.Strategy.Type, ag.Model)
 			}
-			fmt.Println("Mode:", cfg.Chain.Mode, "| Chain:", cfg.Chain.Active, "| Simulation:", cfg.Market.EnableSimulation)
-			fmt.Println("Use Ctrl+C to stop. (MVP: simulation only, on-chain wiring next)")
+			fmt.Printf("Mode: %s | Chain: %s | Simulation: %v\n", cfg.Chain.Mode, cfg.Chain.Active, cfg.Market.EnableSimulation)
+			fmt.Printf("LLM providers: %d (openai/openrouter/groq/aistudio via openai-compatible)\n", len(cfg.GetModelList()))
+			for _, m := range cfg.GetModelList() {
+				fmt.Printf(" - %s -> %s (%s)\n", m.ModelName, m.Model, m.APIBase)
+			}
+			fmt.Println("Watcher + LLM wiring ready. Demo single tick (no loop) ...")
+
+			// Demo single tick: each trader agent decides via LLM (if API key set)
+			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+			defer cancel()
+			_ = watcher
+			_ = roastMgr
+			for _, id := range registry.ListAgentIDs() {
+				if id == "orchestrator" {
+					continue
+				}
+				marketData := "BTC: $65000 RSI 28, ETH: $3500 RSI 45, PEPE trending +120% vol 80k, SOL $150"
+				sig, err := arena.DecideTrade(ctx, cfg, id, marketData)
+				if err != nil {
+					fmt.Printf("[%s] LLM decide skipped (no key?): %v\n", id, err)
+					continue
+				}
+				fmt.Printf("[%s] LLM signal: %s %s $%.2f reason:%s conf:%.2f\n", id, sig.Action, sig.Token, sig.AmountUSD, sig.Reason, sig.Confidence)
+			}
+
+			// Demo roast wiring
+			if should, _ := roastMgr.ShouldRoast("demo-user", false, true); should {
+				txt, err := arena.GenerateRoast(ctx, cfg, "degen", "Budi", "btc scam?")
+				if err == nil {
+					fmt.Printf("[roast demo] %s\n", txt)
+				}
+			}
+			// Show llm client resolution
+			if c, err := llm.ResolveModelForAgent(cfg, "degen"); err == nil {
+				fmt.Printf("LLM client for degen: model=%s base=%s\n", c.Model, c.Config.APIBase)
+			}
+			fmt.Println("Use Ctrl+C to stop. (MVP: single tick demo, loop + Telegram next)")
 			select {}
+		},
+	}
+}
+
+func cmdChat() *cobra.Command {
+	return &cobra.Command{
+		Use:   "chat [agent] [message]",
+		Short: "Test LLM wiring for agent (telegram arena without Telegram)",
+		Args:  cobra.RangeArgs(1, 2),
+		Run: func(cmd *cobra.Command, args []string) {
+			cfg := loadConfig()
+			agentID := args[0]
+			msg := "hello"
+			if len(args) > 1 {
+				msg = args[1]
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
+			defer cancel()
+			client, err := llm.ResolveModelForAgent(cfg, agentID)
+			if err != nil {
+				log.Fatal().Err(err).Msg("resolve model")
+			}
+			ag, _ := cfg.GetModelConfig(client.Config.ModelName)
+			fmt.Printf("Using provider %s (%s) for agent %s\n", ag.ModelName, ag.APIBase, agentID)
+			text, err := llm.Chat(ctx, client, "Kamu adalah "+agentID+" trader AI, jawab singkat 1 baris.", msg, nil, nil)
+			if err != nil {
+				log.Fatal().Err(err).Msg("chat failed - check API key env (GEMINI_API_KEY/OPENAI_API_KEY etc)")
+			}
+			fmt.Printf("[%s] %s\n", agentID, text)
 		},
 	}
 }
@@ -107,7 +174,7 @@ func cmdVersion() *cobra.Command {
 		Use:   "version",
 		Short: "Show version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("onchain-ai-arena v0.1.0 (alpha)")
+			fmt.Println("onchain-ai-arena v0.2.0-alpha")
 		},
 	}
 }

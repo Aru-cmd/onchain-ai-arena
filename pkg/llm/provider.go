@@ -39,8 +39,9 @@ func NewClient(mc *config.ModelConfig) (*Client, error) {
 	opts := []option.RequestOption{
 		option.WithAPIKey(key),
 	}
-	if strings.TrimSpace(mc.APIBase) != "" {
-		opts = append(opts, option.WithBaseURL(strings.TrimSpace(mc.APIBase)))
+	base := strings.TrimSpace(mc.ResolvedAPIBase())
+	if base != "" {
+		opts = append(opts, option.WithBaseURL(base))
 	}
 	// Custom baseURL already handles AIStudio compat:
 	// https://generativelanguage.googleapis.com/v1beta/openai/
