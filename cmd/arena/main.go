@@ -200,7 +200,7 @@ func loadDB(cfg *config.Config) (*db.DB, error) {
 func cmdTelegram() *cobra.Command {
 	return &cobra.Command{
 		Use:   "telegram",
-		Short: "Run Telegram arena with 3 bots + SQLite (orchestrator supervisor)",
+		Short: "Run Telegram arena with 3 bots + SQLite + auto-trading loop",
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg := loadConfig()
 			// Try 3-bot manager first (tokens per agent in telegram.tokens)
@@ -215,6 +215,10 @@ func cmdTelegram() *cobra.Command {
 				}
 				fmt.Println(mgr.LeaderboardText())
 				ctx := cmd.Context()
+				// orchestrator auto-trading loop: 15m degen/fomo, 60m konservatif
+				watcher := trading.NewMarketWatcher(cfg.Chain.JupiterAPI, cfg.Chain.DexScreenerAPI, time.Duration(cfg.Market.PollIntervalSeconds)*time.Second)
+				go mgr.StartLoops(ctx, watcher)
+				fmt.Printf("Auto-trading loop started (konservatif 60m, degen/fomo 15m) broadcasting to %s\n", cfg.Telegram.ChannelID)
 				if err := mgr.Start(ctx); err != nil {
 					log.Fatal().Err(err).Msg("telegram manager failed")
 				}
@@ -247,7 +251,7 @@ func cmdVersion() *cobra.Command {
 		Use:   "version",
 		Short: "Show version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("onchain-ai-arena v0.5.0-alpha")
+			fmt.Println("onchain-ai-arena v0.6.0-alpha")
 		},
 	}
 }
