@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "agents": {
+    "defaults": {
+      "workspace": "./workspace",
+      "restrict_to_workspace": true,
+      "provider": "openai",
+      "model_name": "openai/gpt-4o-mini",
+      "model_fallbacks": ["openai/gpt-4o-mini"],
+      "max_tokens": 1024,
+      "temperature": 0.8,
+      "max_tool_iterations": 10
+    },
+    "list": [
+      {
+        "id": "orchestrator",
+        "name": "Arena Master",
+        "persona": "orchestrator",
+        "default": true,
+        "model": {"primary": "openai/gpt-4o-mini"},
+        "subagents": {
+          "allow_agents": ["konservatif", "degen", "fomo"],
+          "model": {"primary": "openai/gpt-4o-mini"}
+        },
+        "strategy": {"type": "orchestrator"}
+      },
+      {
+        "id": "konservatif",
+        "name": "Boomer RSI",
+        "persona": "konservatif",
+        "model": {"primary": "openai/gpt-4o-mini"},
+        "strategy": {
+          "type": "konservatif",
+          "params": {
+            "rsi_threshold": 30,
+            "tokens": ["So11111111111111111111111111111111111111112", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"],
+            "poll_interval": "1h"
+          }
+        }
+      },
+      {
+        "id": "degen",
+        "name": "Degen Memecoin",
+        "persona": "degen",
+        "model": {"primary": "openai/gpt-4o-mini"},
+        "strategy": {
+          "type": "degen",
+          "params": {
+            "trending_source": "dexscreener",
+            "min_volume_24h": 50000,
+            "poll_interval": "15m"
+          }
+        }
+      },
+      {
+        "id": "fomo",
+        "name": "FOMO Chaser",
+        "persona": "fomo",
+        "model": {"primary": "openai/gpt-4o-mini"},
+        "strategy": {
+          "type": "fomo",
+          "params": {
+            "pump_threshold": 0.2,
+            "volume_spike": 2.0,
+            "poll_interval": "15m"
+          }
+        }
+      }
+    ],
+    "dispatch": {
+      "rules": [
+        {
+          "name": "telegram-arena",
+          "agent": "orchestrator",
+          "when": {"channel": "telegram"}
+        }
+      ]
+    }
+  },
+  "session": {
+    "dimensions": ["chat"],
+    "identity_links": {}
+  },
+  "market": {
+    "poll_interval_seconds": 60,
+    "price_provider": "jupiter",
+    "enable_simulation": true
+  },
+  "roast": {
+    "enabled": true,
+    "global_cooldown_minutes": 30,
+    "user_ttl_hours_min": 6,
+    "user_ttl_hours_max": 12,
+    "random_chance": 0.15,
+    "mention_only": false
+  },
+  "chain": {
+    "active": "solana",
+    "solana_rpc": "https://api.devnet.solana.com",
+    "evm_rpc": "https://sepolia.base.org",
+    "mode": "simulation",
+    "jupiter_api": "https://price.jup.ag/v6",
+    "dexscreener_api": "https://api.dexscreener.com/latest"
+  }
+}
