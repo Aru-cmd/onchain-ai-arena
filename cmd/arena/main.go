@@ -251,7 +251,7 @@ func cmdVersion() *cobra.Command {
 		Use:   "version",
 		Short: "Show version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("onchain-ai-arena v0.7.0-alpha")
+			fmt.Println("onchain-ai-arena v0.8.0-alpha")
 		},
 	}
 }

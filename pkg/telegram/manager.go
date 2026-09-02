@@ -13,6 +13,7 @@ import (
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/arena"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/config"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/db"
+	"github.com/Aru-cmd/onchain-ai-arena/pkg/risk"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/roast"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/trading"
 )
@@ -212,6 +213,10 @@ func (m *Manager) StartLoops(ctx context.Context, watcher *trading.MarketWatcher
 }
 
 func (m *Manager) runAgentTrade(ctx context.Context, agentID, marketData string) error {
+	// Risk: check stop-loss before LLM decision
+	if err := m.checkStopLoss(ctx, agentID); err != nil {
+		log.Warn().Err(err).Str("agent", agentID).Msg("stop-loss check failed")
+	}
 	sig, err := arena.DecideTrade(ctx, m.cfg, agentID, marketData)
 	if err != nil {
 		return err
@@ -220,32 +225,29 @@ func (m *Manager) runAgentTrade(ctx context.Context, agentID, marketData string)
 	if !ok {
 		return fmt.Errorf("bot %q not found", agentID)
 	}
-	// Resolve channel to broadcast
 	channelID := strings.TrimSpace(m.cfg.Telegram.ChannelID)
 	if channelID == "" {
-		// fallback to first bot's last chat - skip if no channel
 		log.Warn().Str("agent", agentID).Msg("telegram.channel_id empty, skip broadcast (set TELEGRAM_CHANNEL_ID)")
 		return nil
 	}
 	var chatID telego.ChatID
-	// channelID may be "@channel" or "-100..." - try ID parse
 	chatID = telego.ChatID{ID: 0}
-	// telego ChatID supports username or ID; we use string handling via SendMessage with ChatID
-	// For simplicity, use channelID as username if starts with @
 	if strings.HasPrefix(channelID, "@") {
 		chatID.Username = channelID
 	} else {
-		// numeric
 		var id int64
 		_, _ = fmt.Sscan(channelID, &id)
 		chatID.ID = id
 	}
 
-	// Execute via DB (orchestrator supervisor)
+	// Risk config (orchestrator caps)
+	riskCfg := risk.DefaultConfig()
+	// Execute via DB (orchestrator supervisor) with risk checks
 	price := map[string]float64{"PEPE": 0.00001, "BTC": 65000, "ETH": 3500, "So11111111111111111111111111111111111111112": 150}[sig.Token]
 	if price == 0 {
 		price = 0.00001
 	}
+	// Apply slippage to price
 	switch sig.Action {
 	case "BUY":
 		amt := sig.AmountUSD
@@ -256,12 +258,21 @@ func (m *Manager) runAgentTrade(ctx context.Context, agentID, marketData string)
 		if token == "" {
 			token = "PEPE"
 		}
+		// Risk: cap to 10% per trade
+		usd, holdings, _, _ := m.db.GetPortfolio(agentID)
+		capped, err := risk.ValidateBuy(amt, usd, len(holdings), riskCfg)
+		if err != nil {
+			_, _ = bot.bot.SendMessage(ctx, &telego.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("[%s] BUY %s blocked by risk: %v", agentID, token, err)})
+			return err
+		}
+		amt = capped
+		effPrice := risk.EstimateSlippage(price, true, riskCfg)
 		txHash := fmt.Sprintf("loop-buy-%s-%.2f-%d", token, amt, time.Now().UnixMilli())
-		if err := m.db.Buy(agentID, token, amt, price, txHash, sig.Reason); err != nil {
+		if err := m.db.Buy(agentID, token, amt, effPrice, txHash, sig.Reason); err != nil {
 			_, _ = bot.bot.SendMessage(ctx, &telego.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("[%s] BUY %s failed: %v", agentID, token, err)})
 			return err
 		}
-		text := fmt.Sprintf("[%s] BUY %s $%.2f @ %.6f tx:%s reason:%s", agentID, token, amt, price, txHash, sig.Reason)
+		text := fmt.Sprintf("[%s] BUY %s $%.2f @ %.6f (slip %.1f%%) tx:%s reason:%s", agentID, token, amt, effPrice, riskCfg.MaxSlippagePct*100, txHash, sig.Reason)
 		if trash, err := arena.GenerateTrashTalk(ctx, m.cfg, agentID, text); err == nil && trash != "" {
 			text += "\n" + trash
 		}
@@ -277,14 +288,55 @@ func (m *Manager) runAgentTrade(ctx context.Context, agentID, marketData string)
 			_, _ = bot.bot.SendMessage(ctx, &telego.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("[%s] HOLD %s (no holdings) reason:%s", agentID, token, sig.Reason)})
 			return nil
 		}
+		if err := risk.ValidateSell(token, amt, holdings[token], riskCfg); err != nil {
+			_, _ = bot.bot.SendMessage(ctx, &telego.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("[%s] SELL %s blocked by risk: %v", agentID, token, err)})
+			return err
+		}
+		effPrice := risk.EstimateSlippage(price, false, riskCfg)
 		txHash := fmt.Sprintf("loop-sell-%s-%.2f-%d", token, amt, time.Now().UnixMilli())
-		if err := m.db.Sell(agentID, token, amt, price, txHash, sig.Reason); err != nil {
+		if err := m.db.Sell(agentID, token, amt, effPrice, txHash, sig.Reason); err != nil {
 			_, _ = bot.bot.SendMessage(ctx, &telego.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("[%s] SELL %s failed: %v", agentID, token, err)})
 			return err
 		}
-		_, _ = bot.bot.SendMessage(ctx, &telego.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("[%s] SELL %s %.2f @ %.6f tx:%s reason:%s", agentID, token, amt, price, txHash, sig.Reason)})
+		_, _ = bot.bot.SendMessage(ctx, &telego.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("[%s] SELL %s %.2f @ %.6f (slip %.1f%%) tx:%s reason:%s", agentID, token, amt, effPrice, riskCfg.MaxSlippagePct*100, txHash, sig.Reason)})
 	default:
 		_, _ = bot.bot.SendMessage(ctx, &telego.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("[%s] HOLD %s reason:%s", agentID, sig.Token, sig.Reason)})
+	}
+	return nil
+}
+
+func (m *Manager) checkStopLoss(ctx context.Context, agentID string) error {
+	_, holdings, avg, err := m.db.GetPortfolio(agentID)
+	if err != nil || len(holdings) == 0 {
+		return nil
+	}
+	// current prices mock - in real would use watcher.Snapshot
+	current := map[string]float64{"PEPE": 0.000008, "BTC": 65000, "ETH": 3500, "So11111111111111111111111111111111111111112": 150}
+	toSell := risk.CheckStopLoss(holdings, avg, current, risk.DefaultConfig())
+	for _, token := range toSell {
+		amt := holdings[token]
+		price := current[token]
+		txHash := fmt.Sprintf("stop-loss-%s-%.2f-%d", token, amt, time.Now().UnixMilli())
+		if err := m.db.Sell(agentID, token, amt, price, txHash, "stop-loss -15%"); err == nil {
+			// broadcast stop-loss
+			if bot, ok := m.bots[agentID]; ok {
+				channelID := strings.TrimSpace(m.cfg.Telegram.ChannelID)
+				if channelID != "" {
+					var chatID telego.ChatID
+					if strings.HasPrefix(channelID, "@") {
+						chatID.Username = channelID
+					} else {
+						var id int64
+						_, _ = fmt.Sscan(channelID, &id)
+						chatID.ID = id
+					}
+					_, _ = bot.bot.SendMessage(ctx, &telego.SendMessageParams{
+						ChatID: chatID,
+						Text:   fmt.Sprintf("[%s] STOP-LOSS SELL %s %.2f @ %.6f (auto -15%%)", agentID, token, amt, price),
+					})
+				}
+			}
+		}
 	}
 	return nil
 }
