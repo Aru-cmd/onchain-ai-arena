@@ -1,65 +1,67 @@
-# Trading - Simulation vs On-Chain
+# Trading - SQLite Fake Testnet vs Simulation vs On-Chain v0.8.0
 
-## Simulation (Default, Rp 0)
+## Mode Default: SQLite Fake Testnet (3 bot + orchestrator)
+
+`pkg/db/sqlite.go` + `pkg/telegram/manager.go`
+
+- **Orchestrator supervisor** pegang DB, kasih tiap bot $100 fake USD awal (`db.EnsureAgent`)
+- `db.Buy(agent, token, amountUSD, price)` → cek saldo, hitung `amountToken`, update `avg_price`, kurangi `usd`, insert `trades`, commit transaksi SQLite
+- `db.Sell(agent, token, amountToken, price)` → cek holdings, tambah `usd`, delete/update holdings
+- TxHash = `loop-buy-PEPE-10.00-123456` / `db-buy-...` / `stop-loss-...` untuk trace
+- `db.Leaderboard(prices)` → `usd + holdings*price` per agent, `PnL = total - 100`
+- Risk guard sebelum DB: `risk.ValidateBuy` cap 10%, `CheckStopLoss` auto -15%, `EstimateSlippage` 3%
+
+```go
+sqlite, _ := db.Open("./data/arena.db")
+sqlite.EnsureAgent("degen", 100)
+sqlite.Buy("degen", "PEPE", 10, 0.00001, "tx1", "viral") // 1M PEPE, usd 90
+sqlite.Sell("degen", "PEPE", 500000, 0.00002, "tx2", "TP") // usd 100
+board, _ := sqlite.Leaderboard(map[string]float64{"PEPE":0.00002})
+```
+
+Leaderboard: `arena leaderboard` atau `Manager.LeaderboardText()` baca dari SQLite (bukan map).
+
+## Mode Lama: Simulation In-Memory (single-bot legacy)
 
 `pkg/trading/simulated.go:SimulatedTrader`
 
-- No private key, no gas, no RPC
-- Prices from `MarketWatcher` (Jupiter/DexScreener) - real market, fake execution
-- Portfolio in memory `map[string]float64`
-- TxHash = `sim-buy-PEPE-10.00-0.000100` for traceability
-- Avg buy price tracked for PnL
+- `map[string]float64` holdings + avg, tanpa DB, tanpa risk
+- Dipakai `cmd/arena leaderboard` kalau `db` belum ada, atau `NewSimulatedTrader` manual
+- TxHash `sim-buy-PEPE-10.00-0.000100`
 
-```go
-tr := trading.NewSimulatedTrader("solana", "degen", 100)
-tr.SetPrice("PEPE", 0.0001)
-tx, price, _ := tr.Buy(ctx, "PEPE", 10) // 100k PEPE
-```
+## MarketWatcher Real (bukan mock) v0.7.0+
 
-## On-Chain (Next Phase)
+`pkg/trading/market.go:MarketWatcher` + `Manager.StartLoops`
 
-### Solana
-`pkg/trading/solana.go:SolanaTrader` (stub)
+- `GetPrices([SOL,USDC])` batch Jupiter `price.jup.ag/v6/price?ids=...` (1 request)
+- `Snapshot()` → `SOL: $152, USDC: $1.00, BTC: $65000 RSI 28, ETH: $3500 RSI 45, Trending: PEPE $0.000012 vol 80k` + fallback kalau API fail
+- `Manager.StartLoops` tiap agent panggil `watcher.Snapshot()` → `DecideTrade` → risk → `db.Buy/Sell` → broadcast ke `telegram.channel_id`
+- Poll interval per agent: `strategy.params.poll_interval` (`konservatif 60m`, `degen/fomo 15m`)
 
-Real flow:
-1. `GET /v6/quote?inputMint=So111...&outputMint=EPjF...&amount=10000000`
-2. `POST /v6/swap` with `userPublicKey`
-3. Sign with `github.com/gagliardetto/solana-go` (needs to be added, not in ~/go cache yet)
-4. Broadcast via `solana-go/rpc` -> pay gas 0.000007 SOL (~Rp 17)
+## On-Chain Real (Next, masih stub)
 
-Needs: `solana-go`, wallet key, Jupiter API.
+`pkg/trading/solana.go` / `evm.go`
 
-### EVM
-`pkg/trading/evm.go:EVMTrader` (stub)
+- Flow Solana: Jupiter Quote `GET /v6/quote` → `POST /v6/swap` + `solana-go` sign → broadcast → gas 0.000007 SOL (~Rp 17)
+- EVM: 0x/1inch + `ethclient` → gas $0.01-0.5 di Base L2
+- Butuh `solana-go` / `ethclient` (belum di `go.mod`, add saat wiring testnet)
 
-Real flow: 0x API quote -> ethclient sign -> broadcast -> gas $0.01-0.5 (Base L2 cheap)
+## Risk v0.8.0
 
-Needs: `go-ethereum/ethclient` (not in ~/go cache yet, add when wiring).
+`pkg/risk/manager.go` — dipakai `Manager.runAgentTrade` sebelum `db.Buy/Sell`:
 
-## MarketWatcher
-
-`pkg/trading/market.go:MarketWatcher`
-
-- Off-chain, no SOL needed
-- Jupiter Price API: `price.jup.ag/v6/price?ids=So111...` - free
-- DexScreener: `api.dexscreener.com/latest/dex/...` - free, 300 req/min
-- Polling via `time.Ticker`, not websocket for MVP
-- Handler pattern: `Poll(ctx, tokens, func(token, price))`
-
-Gas? Per transaction, not one-time. Simulation avoids gas forever. On-chain per tx Rp 17.
+- `ValidateBuy` cap 10% portfolio per trade (50 → 10 jika saldo 100)
+- `CheckStopLoss` scan holdings, `avg` vs `current` → list token drop ≤-15% → auto `db.Sell` all + broadcast `[degen] STOP-LOSS SELL PEPE ...`
+- `ValidateSell` cek holdings cukup
+- `EstimateSlippage` BUY *1.03, SELL *0.97, ditampilkan `BUY ... @ effPrice (slip 3.0%)`
 
 ## Portfolio & PnL
 
+Via DB:
 ```go
-p := trader.GetPortfolio()
-total := p.Value(prices) // USD + holdings*price
-pnl := total - initial
+usd, holdings, avg, _ := db.GetPortfolio("degen")
+total := usd
+for token, amt := range holdings { total += amt * prices[token] }
+pnl := total - 100
 ```
-
-Leaderboard via `arena leaderboard` command.
-
-## Risk
-
-- Check `GetBalance` before Buy
-- Max 10% per trade (to be added in risk pkg)
-- Slippage 3% max
+Via Telegram: `/leaderboard` atau auto setelah tiap `runAgentTrade`.

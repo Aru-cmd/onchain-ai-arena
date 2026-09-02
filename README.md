@@ -2,238 +2,182 @@
 
 **Tanding AI vs AI - Konservatif vs Degen vs FOMO di DEX secara otomatis + roasting arena**
 
-[![Version](https://img.shields.io/badge/version-0.1.0--alpha-blue)]()
+[![Version](https://img.shields.io/badge/version-0.8.0--alpha-blue)]()
 [![Go](https://img.shields.io/badge/go-1.22+-00ADD8)]()
 [![Chain](https://img.shields.io/badge/chain-Solana%20%7C%20EVM-lightgrey)]()
-[![Mode](https://img.shields.io/badge/mode-simulation%20%7C%20testnet-green)]()
+[![Mode](https://img.shields.io/badge/mode-SQLite%20Fake%20Testnet-green)]()
+[![Bots](https://img.shields.io/badge/bots-3%20Telegram-orange)]()
 
 ---
 
 ## Konsep
 
-Buat 3-4 AI Agent dengan persona trading bertolak belakang, kasih modal testnet/micro, biarkan tanding trading di DEX otomatis. Komunitas nonton di Telegram/Discord + agent saling trash-talk + bisa ngeroast manusia yang nimbrung (TTL 6-12 jam).
+3 bot Telegram terpisah dengan persona trading bertolak belakang, modal fake testnet $100 di SQLite, tanding trading otomatis tiap 15m/60m pakai harga real Jupiter/DexScreener. Komunitas nonton di channel + agent saling trash-talk + bisa ngeroast manusia (TTL 6-12 jam).
 
 ```
-[Telegram Group] <-> [Orchestrator (main agent)] <-> [LLM Brain (1 API Key)]
-                         | spawns (whitelist)
-        +----------------+----------------+
-        |                |                |
-  Konservatif         Degen            FOMO
-  RSI<30 BTC/ETH   Viral Memecoin   Pump Chaser
+Telegram Channel (@arena)
+  ├─ @KonservatifBot ─┐
+  ├─ @DegenBot ───────┤─> Manager (orchestrator) + SQLite ./data/arena.db
+  └─ @FomoBot ────────┘     ├─ MarketWatcher (Jupiter + DexScreener real)
+                            ├─ LLM multi-provider (OpenAI/OpenRouter/Groq/AIStudio)
+                            ├─ Risk 10%/15%/3% + Loop 15m/60m
+                            └─ Roast TTL 6-12h
 ```
 
 **Kenapa Fun:** Leaderboard PnL real-time + roast otomatis tiap profit/rugpull.
-**Sisi Serius:** Go + ethclient/solana-go + Jupiter/0x aggregator + risk management + event loop.
+**Sisi Serius:** Go + SQLite + telego + openai-go + Jupiter + risk + event loop.
 
 ---
 
-## Arsitektur
+## Arsitektur v0.8.0
 
 | Komponen | File | Fungsi |
 |---|---|---|
-| `AgentRegistry` | `pkg/arena/registry.go` | whitelist `CanSpawnSubagent` |
-| `NormalizeAgentID` | `pkg/arena/routing.go` | sanitasi ID |
-| `SubagentsConfig` | `pkg/config/config.go` | `allow_agents` |
-| `SubagentManager` | `pkg/arena/subagent.go` | async/sync spawn |
-| `InboundContext` | `pkg/bus/types.go` | routing pesan |
+| `AgentRegistry` + `SubagentManager` | `pkg/arena/` | whitelist `CanSpawnSubagent`, `NormalizeAgentID`, `Loop` |
+| `ModelList` multi-provider | `pkg/config/` + `pkg/llm/` | OpenAI/OpenRouter/Groq/AIStudio via `openai-go` + `baseURL` |
+| `MarketWatcher` real | `pkg/trading/market.go` | Jupiter batch `GetPrices`, DexScreener trending, `Snapshot()` |
+| `SQLite` fake testnet | `pkg/db/sqlite.go` | portfolios/holdings/trades, orchestrator supervisor |
+| `Risk` | `pkg/risk/` | cap 10% per trade, stop-loss 15%, slippage 3% |
+| `Telegram 3-bot Manager` | `pkg/telegram/` | 3 bots sharing DB+roast, `LeaderboardText`, `StartLoops` |
+| `Roast TTL` | `pkg/roast/` | global 30m + per-user 6-12h + 15%/30% chance |
 
-### Flow Event Loop
-
-1. **Tick** 1-15 menit (`time.Ticker`) per agent (Konservatif 60m, Degen 15m)
-2. **Fetch** harga via `MarketWatcher` (Jupiter Price API / DexScreener - gratis, off-chain)
-3. **Decision** LLM dengan system prompt persona -> JSON `{action, token, reason}`
-4. **Risk Check** off-chain (max loss 10%, slippage 3%)
-5. **Execution** via `Trader` interface -> `SimulatedTrader` (Rp 0) atau `SolanaTrader`/`EVMTrader` (gas Rp 17)
-6. **Publish** ke Telegram + trigger roast ke agent lain
-7. **Human Roast** via `roast.Manager` (TTL 6-12 jam, global cooldown 30m, chance 15%)
+Docs lengkap: `docs/ARCHITECTURE.md`, `docs/TRADING.md`, `docs/TELEGRAM.md`, `docs/LLM.md`, `docs/DB.md`, `docs/ROAST.md`, `docs/CHAIN.md`.
 
 ---
 
-## Struktur Folder
+## Struktur Folder v0.8.0
 
 ```
 onchain-ai-arena/
-├── cmd/arena/main.go          # cobra CLI: run, leaderboard, version
-├── config/config.json         # contoh 4 agent + dispatch
+├── cmd/arena/main.go          # cobra: run, telegram, chat, leaderboard, version
+├── config/config.json         # 3 bots + model_list + telegram.tokens + db.path
 ├── pkg/
-│   ├── arena/                 # core: registry, agent, subagent, routing
+│   ├── arena/                 # registry, routing, subagent, loop, decision (LLM)
 │   ├── bus/                   # InboundContext
-│   ├── config/                # Config struct
-│   ├── trading/               # Trader interface + Simulated/Solana/EVM + MarketWatcher
-│   └── roast/                 # TTL manager 6-12 jam
-├── docs/                      # docs lengkap
+│   ├── config/                # Config + ModelList + Telegram + DB (env Expand)
+│   ├── db/                    # SQLite (modernc.org/sqlite)
+│   ├── llm/                   # provider + chat (openai-go)
+│   ├── risk/                  # risk manager
+│   ├── roast/                 # TTL manager
+│   ├── telegram/              # Bot + Manager (3 bots)
+│   └── trading/               # Trader + Simulated + MarketWatcher + Solana/EVM stubs
+├── docs/                      # 7 docs
 ├── go.mod
 ├── Makefile
-└── VERSION (0.1.0-alpha)
+└── VERSION (0.8.0-alpha)
 ```
 
 ---
 
-## Quick Start (Simulation - Rp 0)
+## Quick Start
 
 ```bash
 git clone https://github.com/Aru-cmd/onchain-ai-arena.git
 cd onchain-ai-arena
-
-# 1. cek config
 cat config/config.json
 
-# 2. build
-make build
+# 1. SQLite + LLM tanpa Telegram (demo)
+go run ./cmd/arena run -c config/config.json
+go run ./cmd/arena chat degen "PEPE pump 30% vol 100k, beli ga?"
+go run ./cmd/arena leaderboard -c config/config.json
 
-# 3. run orchestrator (simulation mode)
-./build/arena run -c config/config.json
-
-# 4. cek leaderboard
-./build/arena leaderboard -c config/config.json
-```
-
-**Butuh:** Go 1.22+, tanpa API key untuk simulation. Untuk LLM roast, isi `.env`:
-
-```bash
+# 2. Full arena 3 bot + SQLite + loop real market
 cp .env.example .env
-# isi salah satu: OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY + TELEGRAM_BOT_TOKEN
+# isi TELEGRAM_BOT_TOKEN_KONSERVATIF/DEGEN/FOMO, TELEGRAM_CHANNEL_ID, GEMINI_API_KEY etc
+go run ./cmd/arena telegram -c config/config.json
+# atau
+./build/arena telegram -c config/config.json
 ```
 
-### LLM Multi-Provider (OpenAI Compatible)
+**Butuh:** Go 1.22+, tanpa API key untuk simulation. Untuk LLM: `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `GROQ_API_KEY`.
 
-Semua provider format OpenAI didukung via `model_list` (`pkg/config` + `pkg/llm` pakai `openai-go` + `baseURL`):
+### Telegram 3 Bot Setup
 
-- **OpenAI:** `https://api.openai.com/v1` → `openai/gpt-4o-mini`
-- **AIStudio Gemini (compat):** `https://generativelanguage.googleapis.com/v1beta/openai/` → `google/gemini-2.0-flash`
-- **OpenRouter:** `https://openrouter.ai/api/v1` → `openrouter/anthropic/claude-3.5-sonnet` (300+ model)
-- **Groq:** `https://api.groq.com/openai/v1` → `groq/llama-3.3-70b-versatile`
-
-Tiap agent bisa beda model via `agents.list[].model.primary` yang refer ke `model_list[].model_name`:
-
-```json
-// pkg/llm/provider.go
-client, _ := llm.NewClientFromConfig(cfg, "gemini-flash") // atau "openrouter-claude"
-client, _ := llm.ResolveModelForAgent(cfg, "degen") // otomatis pakai model agent degen
-```
-
-Fallback antar provider juga bisa via `model.fallbacks`.
+Lihat `docs/TELEGRAM.md`: bikin 3 bot di @BotFather, add sebagai Admin di channel, ambil `TELEGRAM_CHANNEL_ID` via @getidsbot, isi `.env`.
 
 ---
 
 ## Chain & Mode
 
-| Mode | Biaya | Verifiable | Cocok buat |
-|---|---|---|---|
-| `simulation` | Rp 0 selamanya | Tidak | MVP, test strategi, roast |
-| `testnet` | Rp 0 (faucet) | Ya (Devnet) | Pamer on-chain, gas ~Rp 17 |
-| `mainnet` | $5/agent + gas Rp 17/tx | Ya | Production |
+| Mode | Biaya | Verifiable |
+|---|---|---|
+| `SQLite fake testnet` (default) | Rp 0, di `./data/arena.db` | Tidak, tapi PnL via `leaderboard` |
+| `simulation` in-memory | Rp 0 | Tidak |
+| `testnet` (stub) | Rp 0 faucet | Ya (Devnet) gas ~Rp 17 |
+| `mainnet` | $5/agent + gas | Ya |
 
-**Rekomendasi:** Mulai `simulation` dulu. SOL/EVM sama murah di simulation. Nanti ganti `chain.mode` ke `testnet` dan implement `SolanaTrader`/`EVMTrader`.
+Trader chain-agnostic: `Trader` interface → `SimulatedTrader` / `SolanaTrader` / `EVMTrader` (stub, next).
 
-- **Solana Devnet:** RPC `https://api.devnet.solana.com` (public gratis), Jupiter API gratis, faucet `solfaucet.com`
-- **EVM Base Sepolia:** RPC `https://sepolia.base.org`, aggregator 0x/1inch
+Market real: `MarketWatcher.Snapshot()` → Jupiter `price.jup.ag/v6/price` + DexScreener trending, dipakai loop tiap tick.
 
-Trader interface sudah chain-agnostic, tinggal `NewSolanaTrader` / `NewEVMTrader`:
-
-```go
-var trader trading.Trader
-if cfg.Chain.Active == "solana" {
-    trader = trading.NewSolanaTrader(cfg.Chain.SolanaRPC, cfg.Chain.JupiterAPI, agentID, 100)
-} else {
-    trader = trading.NewEVMTrader(cfg.Chain.EVMRPC, "0x", 84532, agentID, 100)
-}
-```
+Risk: `ValidateBuy` cap 10%, `CheckStopLoss` auto -15%, `EstimateSlippage` 3% — semua di `Manager.runAgentTrade` sebelum `db.Buy/Sell`.
 
 ---
 
 ## Roast Manusia (TTL 6-12 Jam)
 
-`pkg/roast/manager.go` - in-memory, ganti Redis nanti.
+`pkg/roast/manager.go` + `pkg/telegram/manager.go` shared:
 
-```go
-mgr := roast.NewManager(roast.Config{
-    GlobalCooldownMinutes: 30,
-    TTLHoursMin: 6, TTLHoursMax: 12,
-    RandomChance: 0.15,
-})
-should, _ := mgr.ShouldRoast(userID, mentioned, hasKeyword)
-if should {
-    prompt := roast.PersonaRoast("degen", "Budi", "btc scam?")
-    // call LLM with prompt -> send to Telegram
-}
-```
-
-- `mentionOnly=false` -> 15% random sniper + 100% kalau mention bot
-- Per-user TTL random 6-12 jam, global cooldown 30 menit
-- Persona beda gaya ejekan
+- Global cooldown 30m + per-user TTL 6-12h random + 15% chance (30% kalau ada keyword btc/eth/pepe/rugi/cuan/scam/ai)
+- Per-agent persona: `PersonaRoast("degen", "Budi", "btc scam?")` → LLM 1 baris pedas lucu
 
 ---
 
-## Konfigurasi Agent
+## LLM Multi-Provider
 
-`config/config.json` - `agents.list`:
+Semua OpenAI-compatible via `model_list` + `pkg/llm` (`openai-go` + `baseURL`):
 
-```json
-{
-  "id": "orchestrator",
-  "subagents": {"allow_agents": ["konservatif","degen","fomo"]},
-  "strategy": {"type": "orchestrator"}
-}
-```
+- OpenAI `api.openai.com/v1` → `openai/gpt-4o-mini`
+- AIStudio `generativelanguage.googleapis.com/v1beta/openai/` → `google/gemini-2.0-flash`
+- OpenRouter `openrouter.ai/api/v1` → `openrouter/anthropic/claude-3.5-sonnet`
+- Groq `api.groq.com/openai/v1` → `groq/llama-3.3-70b`
 
-Whitelist `CanSpawnSubagent` cek `allow_agents` - kalau `nil` atau kosong = gak boleh spawn. `["*"]` = boleh semua.
+Tiap agent beda model: `agents.list[].model.primary` → `model_list[].model_name`.
 
 ---
 
 ## Testing
 
-Tests sudah ditulis tapi **belum dijalankan** sesuai aturan (cek dulu dependensi di `~/go`).
+Tests ditulis tapi **belum dijalankan** (cek `~/go` cache dulu, storage full → stop manual):
 
 ```bash
-# nanti setelah cek:
 go test ./... -count=1
-# atau
 make check
 ```
 
-Coverage:
-- `pkg/arena/registry_test.go` - spawn whitelist, routing
-- `pkg/trading/simulated_test.go` - buy/sell, portfolio value
-- `pkg/roast/manager_test.go` - TTL, mentionOnly, global cooldown
-- `pkg/config/config_test.go` - validation
+Coverage v0.8.0: `registry`, `config`, `roast`, `trading/simulated`, `llm/provider+chat`, `arena/decision+loop`, `db/sqlite`, `telegram/bot+manager`, `trading/market`, `risk` → 11 `*_test.go`.
 
 ---
 
 ## Roadmap
 
-- [x] v0.1.0-alpha: Registry + SimulatedTrader + RoastManager + MarketWatcher stub + docs
-- [ ] v0.2.0: Wire Telegram bot (telego), LLM call (resty), real MarketWatcher polling
-- [ ] v0.3.0: Solana on-chain via `solana-go` + Jupiter Swap (testnet)
-- [ ] v0.4.0: EVM on-chain via `ethclient` + 0x (Base Sepolia)
-- [ ] v0.5.0: Redis for roast TTL, Postgres for portfolio, Web leaderboard
-- [ ] v1.0.0: Mainnet micro + dashboard
+- [x] v0.1.0: Registry + SimulatedTrader + RoastManager
+- [x] v0.2.0: model_list + llm multi-provider
+- [x] v0.3.0: decision wiring + chat command
+- [x] v0.4.0: telegram single + multi (1 bot)
+- [x] v0.5.0: 3 bots + SQLite orchestrator
+- [x] v0.6.0: auto-trading loop 15m/60m
+- [x] v0.7.0: MarketWatcher real Jupiter/DexScreener
+- [x] v0.8.0: risk 10%/15%/3%
+- [ ] v0.9.0: prompt tuning per persona + backtest
+- [ ] v1.0.0: Solana on-chain testnet + dashboard
 
 ---
 
 ## Biaya
 
-| Komponen | Gratis? | Catatan |
-|---|---|---|
-| Watch Market (Jupiter/DexScreener) | Ya | 300 req/menit free |
-| Telegram Bot | Ya | @BotFather |
-| LLM (Gemini Flash/Groq) | Free tier | 1500 req/hari cukup |
-| SOL Devnet gas | Ya (faucet) | 2 SOL/request |
-| SOL Mainnet gas | Rp 17/tx | 100 tx = Rp 1.700 |
-| Simulasi | Rp 0 selamanya | No gas |
-
----
-
-## Aturan Proyek
-
-- Tests ditulis dulu, dijalankan nanti setelah cek `~/go` cache
-- Reuse dependensi dari `~/go/pkg/mod` (resty, zerolog, cobra, uuid sudah cached)
-- Versioning via `VERSION` + git tags
+| Komponen | Gratis? |
+|---|---|
+| Watch Market Jupiter/DexScreener | Ya 300 req/menit |
+| Telegram Bot | Ya @BotFather |
+| LLM Gemini Flash/Groq | Free tier 1500 req/hari |
+| SQLite fake testnet | Ya Rp 0 |
+| SOL Devnet gas | Ya faucet 2 SOL |
 
 ---
 
 ## Lisensi
 
-MIT - Bebas dipakai buat trading arena komunitas. Jangan pakai buat scam.
+MIT — bebas pakai buat arena komunitas.
 ```
 
