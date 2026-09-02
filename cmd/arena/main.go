@@ -14,6 +14,7 @@ import (
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/config"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/llm"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/roast"
+	"github.com/Aru-cmd/onchain-ai-arena/pkg/telegram"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/trading"
 )
 
@@ -33,6 +34,7 @@ Support simulation (Rp 0) & on-chain testnet (Solana/EVM).`,
 	root.PersistentFlags().StringVarP(&cfgPath, "config", "c", "config/config.json", "path to config file")
 
 	root.AddCommand(cmdRun())
+	root.AddCommand(cmdTelegram())
 	root.AddCommand(cmdChat())
 	root.AddCommand(cmdLeaderboard())
 	root.AddCommand(cmdVersion())
@@ -169,12 +171,38 @@ func cmdLeaderboard() *cobra.Command {
 	}
 }
 
+func cmdTelegram() *cobra.Command {
+	return &cobra.Command{
+		Use:   "telegram",
+		Short: "Run Telegram arena bot (channel/group with 3 traders + roast TTL)",
+		Run: func(cmd *cobra.Command, args []string) {
+			cfg := loadConfig()
+			token := os.Getenv("TELEGRAM_BOT_TOKEN")
+			if token == "" {
+				log.Fatal().Msg("TELEGRAM_BOT_TOKEN empty - set env or config")
+			}
+			bot, err := telegram.New(cfg, token)
+			if err != nil {
+				log.Fatal().Err(err).Msg("telegram init failed")
+			}
+			fmt.Printf("Telegram arena: %v | providers: %d\n", bot, len(cfg.GetModelList()))
+			ctx := cmd.Context()
+			if err := bot.Start(ctx); err != nil {
+				log.Fatal().Err(err).Msg("telegram start failed")
+			}
+			// block until ctx done
+			<-ctx.Done()
+			bot.Stop()
+		},
+	}
+}
+
 func cmdVersion() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Show version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("onchain-ai-arena v0.2.0-alpha")
+			fmt.Println("onchain-ai-arena v0.4.0-alpha")
 		},
 	}
 }
