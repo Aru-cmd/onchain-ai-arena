@@ -9,6 +9,7 @@ require (
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
+	modernc.org/sqlite v1.48.2
 )
 
 require (

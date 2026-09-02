@@ -9,13 +9,15 @@ import (
 
 // Config is root config for onchain-ai-arena.
 type Config struct {
-	Version   int          `json:"version"`
-	Agents    AgentsConfig `json:"agents"`
-	Session   SessionConfig `json:"session,omitempty"`
-	ModelList []ModelConfig `json:"model_list"`
-	Market    MarketConfig `json:"market"`
-	Roast     RoastConfig  `json:"roast"`
-	Chain     ChainConfig  `json:"chain"`
+	Version   int            `json:"version"`
+	Agents    AgentsConfig   `json:"agents"`
+	Session   SessionConfig  `json:"session,omitempty"`
+	ModelList []ModelConfig  `json:"model_list"`
+	Market    MarketConfig   `json:"market"`
+	Roast     RoastConfig    `json:"roast"`
+	Chain     ChainConfig    `json:"chain"`
+	Telegram  TelegramConfig `json:"telegram"`
+	DB        DBConfig       `json:"db"`
 }
 
 // ModelConfig defines a single LLM provider entry (OpenAI-compatible).
@@ -203,6 +205,51 @@ type ChainConfig struct {
 	Mode         string `json:"mode"` // simulation, testnet, mainnet
 	JupiterAPI   string `json:"jupiter_api"`
 	DexScreenerAPI string `json:"dexscreener_api"`
+}
+
+type TelegramConfig struct {
+	Tokens    map[string]string `json:"tokens"` // agent_id -> bot token, value may be ${TELEGRAM_BOT_TOKEN_KONSERVATIF}
+	ChannelID string            `json:"channel_id,omitempty"` // arena channel/group id for 3 bots to join
+}
+
+func (t TelegramConfig) GetToken(agentID string) string {
+	if t.Tokens == nil {
+		return ""
+	}
+	raw, ok := t.Tokens[agentID]
+	if !ok {
+		// try case-insensitive
+		for k, v := range t.Tokens {
+			if strings.EqualFold(k, agentID) {
+				raw = v
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return ""
+		}
+	}
+	return os.ExpandEnv(raw)
+}
+
+type DBConfig struct {
+	Path       string  `json:"path"` // e.g. "./data/arena.db" or ":memory:" for tests
+	InitialUSD float64 `json:"initial_usd"`
+}
+
+func (d DBConfig) GetPath() string {
+	if strings.TrimSpace(d.Path) == "" {
+		return "./data/arena.db"
+	}
+	return os.ExpandEnv(d.Path)
+}
+
+func (d DBConfig) GetInitialUSD() float64 {
+	if d.InitialUSD <= 0 {
+		return 100
+	}
+	return d.InitialUSD
 }
 
 // Validate minimal checks.

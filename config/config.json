@@ -131,5 +131,17 @@
     "mode": "simulation",
     "jupiter_api": "https://price.jup.ag/v6",
     "dexscreener_api": "https://api.dexscreener.com/latest"
+  },
+  "telegram": {
+    "channel_id": "${TELEGRAM_CHANNEL_ID}",
+    "tokens": {
+      "konservatif": "${TELEGRAM_BOT_TOKEN_KONSERVATIF}",
+      "degen": "${TELEGRAM_BOT_TOKEN_DEGEN}",
+      "fomo": "${TELEGRAM_BOT_TOKEN_FOMO}"
+    }
+  },
+  "db": {
+    "path": "./data/arena.db",
+    "initial_usd": 100
   }
 }

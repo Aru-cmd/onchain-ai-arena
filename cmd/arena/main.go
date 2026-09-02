@@ -12,6 +12,7 @@ import (
 
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/arena"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/config"
+	"github.com/Aru-cmd/onchain-ai-arena/pkg/db"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/llm"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/roast"
 	"github.com/Aru-cmd/onchain-ai-arena/pkg/telegram"
@@ -153,17 +154,34 @@ func cmdChat() *cobra.Command {
 func cmdLeaderboard() *cobra.Command {
 	return &cobra.Command{
 		Use:   "leaderboard",
-		Short: "Show PnL leaderboard (simulated)",
+		Short: "Show PnL leaderboard (SQLite fake testnet if DB exists, else simulation)",
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg := loadConfig()
+			// Try SQLite first (3-bot mode)
+			if cfg.DB.GetPath() != "" {
+				if db, err := loadDB(cfg); err == nil {
+					defer db.Close()
+					prices := map[string]float64{"So11111111111111111111111111111111111111112": 150, "PEPE": 0.00001, "BTC": 65000, "ETH": 3500, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 1}
+					board, _ := db.Leaderboard(prices)
+					fmt.Println("=== LEADERBOARD (SQLite Fake Testnet) ===")
+					for id, total := range board {
+						usd, _, _, _ := db.GetPortfolio(id)
+						fmt.Printf("%-12s USD:%.2f Total:%.2f PnL:%+.2f\n", id, usd, total, total-cfg.DB.GetInitialUSD())
+					}
+					if len(board) > 0 {
+						return
+					}
+				}
+			}
 			registry := arena.NewAgentRegistry(cfg)
-			// demo: create simulated traders per agent
-			fmt.Println("=== LEADERBOARD (Simulation) ===")
+			fmt.Println("=== LEADERBOARD (Simulation in-memory) ===")
 			for _, id := range registry.ListAgentIDs() {
-				tr := trading.NewSimulatedTrader(cfg.Chain.Active, id, 100)
-				// mock prices for demo
+				if id == "orchestrator" {
+					continue
+				}
+				tr := trading.NewSimulatedTrader(cfg.Chain.Active, id, cfg.DB.GetInitialUSD())
 				tr.SetPrice("So11111111111111111111111111111111111111112", 150)
-				tr.SetPrice("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 1) // USDC
+				tr.SetPrice("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 1)
 				bal, _ := tr.GetBalance(cmd.Context())
 				fmt.Printf("%-12s | USD: %6.2f | Holdings: %v\n", id, bal, tr.GetPortfolio().Holdings)
 			}
@@ -171,26 +189,53 @@ func cmdLeaderboard() *cobra.Command {
 	}
 }
 
+func openDB(path string) (*db.DB, error) {
+	return db.Open(path)
+}
+
+func loadDB(cfg *config.Config) (*db.DB, error) {
+	return openDB(cfg.DB.GetPath())
+}
+
 func cmdTelegram() *cobra.Command {
 	return &cobra.Command{
 		Use:   "telegram",
-		Short: "Run Telegram arena bot (channel/group with 3 traders + roast TTL)",
+		Short: "Run Telegram arena with 3 bots + SQLite (orchestrator supervisor)",
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg := loadConfig()
+			// Try 3-bot manager first (tokens per agent in telegram.tokens)
+			if len(cfg.Telegram.Tokens) > 0 {
+				mgr, err := telegram.NewManager(cfg)
+				if err != nil {
+					log.Fatal().Err(err).Msg("telegram manager init failed (check telegram.tokens + DB path)")
+				}
+				fmt.Printf("Telegram arena 3-bot + SQLite: %d bots | DB:%s | providers:%d\n", len(mgr.Bots()), cfg.DB.GetPath(), len(cfg.GetModelList()))
+				for id := range mgr.Bots() {
+					fmt.Printf(" - bot @%s\n", id)
+				}
+				fmt.Println(mgr.LeaderboardText())
+				ctx := cmd.Context()
+				if err := mgr.Start(ctx); err != nil {
+					log.Fatal().Err(err).Msg("telegram manager failed")
+				}
+				<-ctx.Done()
+				mgr.Stop()
+				return
+			}
+			// Fallback single bot (legacy)
 			token := os.Getenv("TELEGRAM_BOT_TOKEN")
 			if token == "" {
-				log.Fatal().Msg("TELEGRAM_BOT_TOKEN empty - set env or config")
+				log.Fatal().Msg("TELEGRAM_BOT_TOKEN empty and telegram.tokens empty - set 3 tokens in config telegram.tokens")
 			}
 			bot, err := telegram.New(cfg, token)
 			if err != nil {
 				log.Fatal().Err(err).Msg("telegram init failed")
 			}
-			fmt.Printf("Telegram arena: %v | providers: %d\n", bot, len(cfg.GetModelList()))
+			fmt.Printf("Telegram arena single-bot: %v | providers: %d\n", bot, len(cfg.GetModelList()))
 			ctx := cmd.Context()
 			if err := bot.Start(ctx); err != nil {
 				log.Fatal().Err(err).Msg("telegram start failed")
 			}
-			// block until ctx done
 			<-ctx.Done()
 			bot.Stop()
 		},
@@ -202,7 +247,7 @@ func cmdVersion() *cobra.Command {
 		Use:   "version",
 		Short: "Show version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("onchain-ai-arena v0.4.0-alpha")
+			fmt.Println("onchain-ai-arena v0.5.0-alpha")
 		},
 	}
 }
