@@ -189,18 +189,15 @@ func (m *Manager) StartLoops(ctx context.Context, watcher *trading.MarketWatcher
 		loops = append(loops, arena.LoopConfig{
 			AgentID:      agentIDCopy,
 			PollInterval: interval,
-			MarketDataFn: func(c context.Context) (string, error) {
-				// Try watcher if available, else fallback
+				MarketDataFn: func(c context.Context) (string, error) {
 				if watcher != nil {
-					// fetch a few prices for market snapshot
-					prices := make(map[string]float64)
-					for _, token := range []string{"BTC", "ETH", "PEPE"} {
-						// Use simulated prices for now; real watcher would call GetPrice
-						_ = token
+					if snap, err := watcher.Snapshot(c); err == nil && snap != "" {
+						return fmt.Sprintf("%s (agent:%s)", snap, agentIDCopy), nil
+					} else if err != nil {
+						log.Warn().Err(err).Str("agent", agentIDCopy).Msg("watcher snapshot failed, fallback")
 					}
-					_ = prices
 				}
-				return fmt.Sprintf("BTC $65000 RSI 28, ETH $3500 RSI 45, SOL $150, PEPE +120%% vol (agent:%s)", agentIDCopy), nil
+				return fmt.Sprintf("BTC $65000 RSI 28, ETH $3500 RSI 45, SOL $150, PEPE +120%% vol (agent:%s) [fallback]", agentIDCopy), nil
 			},
 			TradeFn: func(c context.Context, marketData string) error {
 				return m.runAgentTrade(c, agentIDCopy, marketData)
