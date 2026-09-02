@@ -8,12 +8,71 @@ import (
 
 // Config is root config for onchain-ai-arena.
 type Config struct {
-	Version int          `json:"version"`
-	Agents  AgentsConfig `json:"agents"`
-	Session SessionConfig `json:"session,omitempty"`
-	Market  MarketConfig `json:"market"`
-	Roast   RoastConfig  `json:"roast"`
-	Chain   ChainConfig  `json:"chain"`
+	Version   int          `json:"version"`
+	Agents    AgentsConfig `json:"agents"`
+	Session   SessionConfig `json:"session,omitempty"`
+	ModelList []ModelConfig `json:"model_list"`
+	Market    MarketConfig `json:"market"`
+	Roast     RoastConfig  `json:"roast"`
+	Chain     ChainConfig  `json:"chain"`
+}
+
+// ModelConfig defines a single LLM provider entry (OpenAI-compatible).
+// Mirrors multi-provider pattern: model_name is the alias used by agents,
+// model is the actual identifier sent to the provider, api_base + api_key
+// allow routing to OpenAI, OpenRouter, Groq, AIStudio (via compat), etc.
+type ModelConfig struct {
+	ModelName string   `json:"model_name"` // alias, e.g. "gemini-flash", "openrouter-claude"
+	Model     string   `json:"model"`      // e.g. "openai/gpt-4o-mini", "google/gemini-2.0-flash", "openrouter/anthropic/claude-3.5-sonnet"
+	APIBase   string   `json:"api_base,omitempty"`
+	APIKey    string   `json:"api_key,omitempty"`
+	APIKeys   []string `json:"api_keys,omitempty"` // alternative: multiple keys for rotation
+	Fallbacks []string `json:"fallbacks,omitempty"`
+	Enabled   *bool    `json:"enabled,omitempty"`
+	RPM       int      `json:"rpm,omitempty"`
+	MaxTokens int      `json:"max_tokens,omitempty"`
+}
+
+// APIKey returns first available key.
+func (m *ModelConfig) GetAPIKey() string {
+	if m.APIKey != "" {
+		return m.APIKey
+	}
+	if len(m.APIKeys) > 0 {
+		return m.APIKeys[0]
+	}
+	return ""
+}
+
+// IsEnabled returns true if model is enabled (default true if nil).
+func (m *ModelConfig) IsEnabled() bool {
+	if m.Enabled == nil {
+		return true
+	}
+	return *m.Enabled
+}
+
+// GetModelList returns enabled models.
+func (c *Config) GetModelList() []ModelConfig {
+	out := make([]ModelConfig, 0, len(c.ModelList))
+	for _, m := range c.ModelList {
+		if m.IsEnabled() {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// GetModelConfig finds model by alias (model_name) or full model string.
+func (c *Config) GetModelConfig(name string) (*ModelConfig, bool) {
+	name = strings.TrimSpace(name)
+	for i := range c.ModelList {
+		m := &c.ModelList[i]
+		if m.ModelName == name || m.Model == name {
+			return m, true
+		}
+	}
+	return nil, false
 }
 
 type AgentsConfig struct {

@@ -5,8 +5,8 @@
       "workspace": "./workspace",
       "restrict_to_workspace": true,
       "provider": "openai",
-      "model_name": "openai/gpt-4o-mini",
-      "model_fallbacks": ["openai/gpt-4o-mini"],
+      "model_name": "gemini-flash",
+      "model_fallbacks": ["gpt-4o-mini"],
       "max_tokens": 1024,
       "temperature": 0.8,
       "max_tool_iterations": 10
@@ -17,10 +17,10 @@
         "name": "Arena Master",
         "persona": "orchestrator",
         "default": true,
-        "model": {"primary": "openai/gpt-4o-mini"},
+        "model": {"primary": "gemini-flash"},
         "subagents": {
           "allow_agents": ["konservatif", "degen", "fomo"],
-          "model": {"primary": "openai/gpt-4o-mini"}
+          "model": {"primary": "gemini-flash"}
         },
         "strategy": {"type": "orchestrator"}
       },
@@ -28,7 +28,7 @@
         "id": "konservatif",
         "name": "Boomer RSI",
         "persona": "konservatif",
-        "model": {"primary": "openai/gpt-4o-mini"},
+        "model": {"primary": "gemini-flash"},
         "strategy": {
           "type": "konservatif",
           "params": {
@@ -42,7 +42,7 @@
         "id": "degen",
         "name": "Degen Memecoin",
         "persona": "degen",
-        "model": {"primary": "openai/gpt-4o-mini"},
+        "model": {"primary": "openrouter-claude"},
         "strategy": {
           "type": "degen",
           "params": {
@@ -56,7 +56,7 @@
         "id": "fomo",
         "name": "FOMO Chaser",
         "persona": "fomo",
-        "model": {"primary": "openai/gpt-4o-mini"},
+        "model": {"primary": "gemini-flash"},
         "strategy": {
           "type": "fomo",
           "params": {
@@ -81,6 +81,36 @@
     "dimensions": ["chat"],
     "identity_links": {}
   },
+  "model_list": [
+    {
+      "model_name": "gemini-flash",
+      "model": "google/gemini-2.0-flash",
+      "api_base": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "api_key": "${GEMINI_API_KEY}",
+      "enabled": true
+    },
+    {
+      "model_name": "gpt-4o-mini",
+      "model": "openai/gpt-4o-mini",
+      "api_base": "https://api.openai.com/v1",
+      "api_key": "${OPENAI_API_KEY}",
+      "enabled": true
+    },
+    {
+      "model_name": "openrouter-claude",
+      "model": "openrouter/anthropic/claude-3.5-sonnet",
+      "api_base": "https://openrouter.ai/api/v1",
+      "api_key": "${OPENROUTER_API_KEY}",
+      "enabled": true
+    },
+    {
+      "model_name": "groq-llama",
+      "model": "groq/llama-3.3-70b-versatile",
+      "api_base": "https://api.groq.com/openai/v1",
+      "api_key": "${GROQ_API_KEY}",
+      "enabled": true
+    }
+  ],
   "market": {
     "poll_interval_seconds": 60,
     "price_provider": "jupiter",

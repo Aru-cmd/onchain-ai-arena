@@ -92,8 +92,27 @@ make build
 
 ```bash
 cp .env.example .env
-# isi OPENAI_API_KEY atau GEMINI_API_KEY, TELEGRAM_BOT_TOKEN
+# isi salah satu: OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY + TELEGRAM_BOT_TOKEN
 ```
+
+### LLM Multi-Provider (OpenAI Compatible)
+
+Semua provider format OpenAI didukung via `model_list` (`pkg/config` + `pkg/llm` pakai `openai-go` + `baseURL`):
+
+- **OpenAI:** `https://api.openai.com/v1` → `openai/gpt-4o-mini`
+- **AIStudio Gemini (compat):** `https://generativelanguage.googleapis.com/v1beta/openai/` → `google/gemini-2.0-flash`
+- **OpenRouter:** `https://openrouter.ai/api/v1` → `openrouter/anthropic/claude-3.5-sonnet` (300+ model)
+- **Groq:** `https://api.groq.com/openai/v1` → `groq/llama-3.3-70b-versatile`
+
+Tiap agent bisa beda model via `agents.list[].model.primary` yang refer ke `model_list[].model_name`:
+
+```json
+// pkg/llm/provider.go
+client, _ := llm.NewClientFromConfig(cfg, "gemini-flash") // atau "openrouter-claude"
+client, _ := llm.ResolveModelForAgent(cfg, "degen") // otomatis pakai model agent degen
+```
+
+Fallback antar provider juga bisa via `model.fallbacks`.
 
 ---
 
